@@ -23,7 +23,7 @@ const validStatuses = [
     'Completed'
 ];
 
-// Read an API error response without assuming its body is valid JSON.
+// Read an API error response safely.
 async function getApiErrorMessage(response) {
     try {
         const data = await response.json();
@@ -32,13 +32,13 @@ async function getApiErrorMessage(response) {
             return data.error;
         }
     } catch (error) {
-        // Use the HTTP status if the response has no readable JSON.
+        // Fall back to the HTTP status.
     }
 
     return `Request failed (HTTP ${response.status}).`;
 }
 
-// Check the shape of the project list returned by the API.
+// Validate the collection returned by the API.
 function isValidProjectArray(data) {
     if (!Array.isArray(data)) {
         return false;
@@ -66,8 +66,8 @@ function isValidProjectArray(data) {
     });
 }
 
-// Enable controls only when the collection is loaded
-// and no request is currently in progress.
+// Disable mutation controls while requests are pending
+// or when the collection has not loaded successfully.
 function updateControls() {
     const disabled = isBusy || !hasLoaded;
 
@@ -81,7 +81,7 @@ function updateControls() {
     });
 }
 
-// Display the current API collection.
+// Display the current collection or the appropriate empty/error state.
 function render() {
     projectList.textContent = '';
 
@@ -129,16 +129,19 @@ function render() {
     updateControls();
 }
 
-// Fetch the latest project collection from the server.
+// Load projects from the API.
 async function loadProjects() {
+    isLoading = true;
+    render();
+
     let response;
 
     try {
         response = await fetch('/api/projects');
     } catch (error) {
-        projects.length = 0;
         hasLoaded = false;
         isLoading = false;
+        projects.length = 0;
 
         render();
         message.textContent =
@@ -149,9 +152,9 @@ async function loadProjects() {
     if (!response.ok) {
         const errorMessage = await getApiErrorMessage(response);
 
-        projects.length = 0;
         hasLoaded = false;
         isLoading = false;
+        projects.length = 0;
 
         render();
         message.textContent = `Could not load projects: ${errorMessage}`;
@@ -163,9 +166,9 @@ async function loadProjects() {
     try {
         data = await response.json();
     } catch (error) {
-        projects.length = 0;
         hasLoaded = false;
         isLoading = false;
+        projects.length = 0;
 
         render();
         message.textContent =
@@ -174,9 +177,9 @@ async function loadProjects() {
     }
 
     if (!isValidProjectArray(data)) {
-        projects.length = 0;
         hasLoaded = false;
         isLoading = false;
+        projects.length = 0;
 
         render();
         message.textContent =
@@ -191,6 +194,10 @@ async function loadProjects() {
     isLoading = false;
 
     render();
+
+    // Important: clear stale loading or error feedback after success.
+    message.textContent = '';
+
     return true;
 }
 
@@ -202,7 +209,7 @@ function resetForm() {
     cancelButton.hidden = true;
 }
 
-// Handle Edit and Delete using stable server-generated IDs.
+// Handle Edit and Delete actions using stable server IDs.
 projectList.addEventListener('click', async event => {
     if (isBusy || !hasLoaded) {
         return;
@@ -242,7 +249,7 @@ projectList.addEventListener('click', async event => {
         `Are you sure you want to delete "${project.name}"?`
     );
 
-    // Cancellation must not send a request or change the collection.
+    // Cancelled deletion sends no request.
     if (!confirmed) {
         return;
     }
@@ -263,18 +270,17 @@ projectList.addEventListener('click', async event => {
             return;
         }
 
-        // Reset edit mode only if the server deleted that project.
+        // Reset edit mode if the deleted record was being edited.
         if (editingId === id) {
             resetForm();
         }
 
-        // The server, not the old array, determines the new list.
         if (await loadProjects()) {
             message.textContent = 'Project deleted successfully.';
         }
     } catch (error) {
         message.textContent =
-            'Could not connect to the server. The project could not be deleted.';
+            'Could not connect to the server. The deletion could not be confirmed.';
     } finally {
         isBusy = false;
         updateControls();
@@ -329,34 +335,36 @@ form.addEventListener('submit', async event => {
         });
 
         if (!response.ok) {
-            message.textContent = wasEditing
-                ? `Could not update project: ${await getApiErrorMessage(response)}`
-                : `Could not add project: ${await getApiErrorMessage(response)}`;
+            const errorMessage = await getApiErrorMessage(response);
 
-            // Preserve the form and editing state on failure.
+            message.textContent = wasEditing
+                ? `Could not update project: ${errorMessage}`
+                : `Could not add project: ${errorMessage}`;
+
+            // Keep the form values and edit state after a failed save.
             return;
         }
 
         // The mutation succeeded. Return the form to Add mode.
         resetForm();
 
-        // Reload the collection instead of guessing the server's result.
+        // Fetch the server's current collection.
         if (await loadProjects()) {
             message.textContent = wasEditing
                 ? 'Project updated successfully.'
                 : 'Project added successfully.';
         }
     } catch (error) {
-        // Do not reset the form when a request fails at the network level.
         message.textContent =
             'Could not connect to the server. Your changes could not be confirmed.';
     } finally {
+        // Always restore controls after success or failure.
         isBusy = false;
         updateControls();
     }
 });
 
-// Cancel edit without sending a request.
+// Cancel editing without sending a request.
 cancelButton.addEventListener('click', () => {
     if (isBusy || !hasLoaded) {
         return;
@@ -366,10 +374,9 @@ cancelButton.addEventListener('click', () => {
     message.textContent = 'Edit cancelled.';
 });
 
-// Load the server collection when the page starts.
+// Load the collection when the page starts.
 async function start() {
     message.textContent = 'Loading projects...';
-    render();
     await loadProjects();
 }
 
